@@ -6,7 +6,6 @@
   <a href="https://github.com/ntthanh2603/gemini-web-to-api/releases"><img src="https://img.shields.io/github/v/release/ntthanh2603/gemini-web-to-api?style=flat-square&logo=github&color=3670ad" alt="Release"></a>
   <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go" alt="Go Version"></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker" alt="Docker"></a>
-  <a href="https://github.com/ntthanh2603/gemini-web-to-api/pkgs/container/gemini-web-to-api"><img src="https://img.shields.io/badge/GHCR-Ready-2496ED?style=flat-square&logo=github" alt="GHCR"></a>
   <a href="https://github.com/ntthanh2603/gemini-web-to-api/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ntthanh2603/gemini-web-to-api?style=flat-square&color=orange" alt="License"></a>
   <img src="https://img.shields.io/badge/Maintained%3F-yes-green.svg?style=flat-square" alt="Maintained">
 </p>
@@ -58,9 +57,9 @@
 
 ## ⚡ Quick Start
 
-### 🐳 Option A — Docker Run (no setup required)
+### 🐳 Option A — Build and run with Docker
 
-> No cloning needed — pull and run directly from the registry.
+Clone this fork and build locally. No image registry or GHCR publishing is required.
 
 **Step 1 — Get your cookies**
 
@@ -71,27 +70,23 @@
 2. Press `F12` → **Network**, reload Gemini, and select a
    `batchexecute?rpcids=otAQ7b` request
 3. Copy its complete `Cookie` request header. If the request URL contains an
-   account slot such as `/u/2/`, also use `GEMINI_AUTH_USER="2"` below.
+   account slot such as `/u/2/`, set `GEMINI_AUTH_USER=2` in `.env`. Leave it empty for slot 0.
 
-**Step 2 — Run**
+**Step 2 — Build and run**
+
+Copy `.env.example` to `.env`, then set the complete `GEMINI_COOKIES` header and a random `API_KEY`. To use native upscale without automatic generation retries, set `GEMINI_IMAGE_UPSCALE=true` and `GEMINI_MAX_RETRIES=1`. Keep the environment file private.
 
 ```bash
-docker run -d -p 4981:4981 \
-  -e GEMINI_COOKIES="your_complete_cookie_header" \
-  -e GEMINI_AUTH_USER="2" \
-  -e GEMINI_REFRESH_INTERVAL=1440 \
-  -e GEMINI_MAX_RETRIES=3 \
-  -e GEMINI_TEMPORARY=false \
-  -e APP_ENV=production \
-  -e RATE_LIMIT_ENABLED=true \
-  -e RATE_LIMIT_WINDOW_MS=60000 \
-  -e RATE_LIMIT_MAX_REQUESTS=10 \
-  -v ./cookies:/home/appuser/.cookies \
+docker build -t gemini-web-to-api:local .
+
+docker run -d -p 127.0.0.1:4981:4981 \
+  --env-file .env \
+  -v gemini-web-to-api-cookies:/home/appuser/.cookies \
   --tmpfs /tmp:rw,size=512m \
   --tmpfs /home/appuser/.cache:rw,size=256m \
   --name gemini-web-to-api \
   --restart unless-stopped \
-  ghcr.io/ntthanh2603/gemini-web-to-api:latest
+  gemini-web-to-api:local
 ```
 
 **Done!** Jump to [Test it](#-test-it). 🎉
@@ -105,7 +100,7 @@ docker run -d -p 4981:4981 \
 **Step 1 — Clone the repository**
 
 ```bash
-git clone https://github.com/ntthanh2603/gemini-web-to-api.git
+git clone https://github.com/m0n99/gemini-web-to-api.git
 cd gemini-web-to-api
 ```
 
@@ -217,7 +212,9 @@ Image, video and music generation report no token counts.
 | `GEMINI_COOKIES`          | ✅ Yes   | —       | Complete Cookie request header copied from the Gemini Web tab    |
 | `GEMINI_AUTH_USER`        | ❌ No    | —       | Google account slot from the Gemini URL, e.g. `2` for `/u/2/app` |
 | `GEMINI_REFRESH_INTERVAL` | ❌ No    | `1440`  | Cookie rotation interval in minutes (minimum `10`), see below    |
-| `GEMINI_MAX_RETRIES`      | ❌ No    | `3`     | Max retry attempts when an API call fails                        |
+| `GEMINI_MAX_RETRIES`      | ❌ No    | `3`     | Max retry attempts when an API call fails. `1` or less disables provider retries, tool-bridge regeneration and JSON repair |
+| `GEMINI_IMAGE_UPSCALE`    | ❌ No    | `false` | Try Gemini's native upscaled bytes for generated images; falls back to the standard image without regenerating |
+| `API_KEY`                 | ❌ No    | —       | Bearer token required for `/openai`, `/gemini` and `/claude` inference routes; `/health` and `/docs` stay open |
 | `GEMINI_TEMPORARY`        | ❌ No    | `false` | Enable stateless/incognito mode for all requests                 |
 | `GEMINI_VIDEO_TIMEOUT_MINUTES` | ❌ No | `10` | Minutes a video job may take (maximum `60`); only one video job runs at a time |
 | `GEMINI_COOKIE_API_KEY`   | ❌ No    | —       | Bearer token that enables `POST /admin/cookies`, see below       |

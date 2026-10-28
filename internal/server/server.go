@@ -2,7 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"fmt"
+	"strings"
 	"time"
 
 	"gemini-web-to-api/internal/commons/configs"
@@ -15,10 +18,23 @@ import (
 	"go.uber.org/zap"
 )
 
+// authenticatedBodyLimit covers four 20 MiB inline references after base64
+// expansion (about 27 MiB each) with room for JSON framing.
+const authenticatedBodyLimit = 128 << 20
+
 // New creates a new Fiber app instance
 func NewGeminiWebToAPI(log *zap.Logger, cfg *configs.Config) *fiber.App {
+	// Authenticated NexAI deployments send inline reference images that can
+	// exceed Fiber's 4 MiB default. The limit only rises when API_KEY is set:
+	// the bearer gate then sits in front of the inference routes, which is the
+	// private-service boundary this larger body depends on.
+	bodyLimit := fiber.DefaultBodyLimit
+	if cfg.Server.APIKey != "" {
+		bodyLimit = authenticatedBodyLimit
+	}
 	app := fiber.New(fiber.Config{
-		AppName: "Gemini Web To API",
+		AppName:   "Gemini Web To API",
+		BodyLimit: bodyLimit,
 	})
 
 	app.Use(cors.New(cors.Config{
@@ -37,12 +53,45 @@ func NewGeminiWebToAPI(log *zap.Logger, cfg *configs.Config) *fiber.App {
 		}))
 	}
 
+	// Inference route groups only. Health, docs and /admin keep their own rules.
+	if key := cfg.Server.APIKey; key != "" {
+		gate := requireAPIKey(key)
+		for _, prefix := range []string{"/openai", "/gemini", "/claude"} {
+			app.Use(prefix, gate)
+		}
+	}
+
 	app.Get("/docs", ScalarUI)
 	app.Get("/openapi.json", OpenAPISpec)
 
 	app.Get("/health", HealthCheck)
 
 	return app
+}
+
+// requireAPIKey accepts only `Authorization: Bearer <key>`. The comparison uses
+// SHA-256 digests so the check does not leak the key length or prefix timing.
+func requireAPIKey(key string) fiber.Handler {
+	want := sha256.Sum256([]byte(key))
+	return func(c fiber.Ctx) error {
+		token, ok := strings.CutPrefix(c.Get(fiber.HeaderAuthorization), "Bearer ")
+		if !ok {
+			return unauthorized(c)
+		}
+		got := sha256.Sum256([]byte(strings.TrimSpace(token)))
+		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+			return unauthorized(c)
+		}
+		return c.Next()
+	}
+}
+
+func unauthorized(c fiber.Ctx) error {
+	return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+		"status":  fiber.StatusUnauthorized,
+		"error":   "Unauthorized",
+		"message": "missing or invalid API key",
+	})
 }
 
 func HealthCheck(c fiber.Ctx) error {
@@ -89,4 +138,3 @@ func RegisterFiberLifecycle(lc fx.Lifecycle, app *fiber.App, cfg *configs.Config
 		},
 	})
 }
-

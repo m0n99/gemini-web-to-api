@@ -29,6 +29,32 @@ func TestNewVideoTimeoutMinutes(t *testing.T) {
 	}
 }
 
+func TestNewImageUpscaleAndAPIKeyDefaults(t *testing.T) {
+	t.Setenv("GEMINI_COOKIES", "__Secure-1PSID=psid; __Secure-1PSIDTS=psidts")
+	t.Setenv("GEMINI_IMAGE_UPSCALE", "")
+	t.Setenv("API_KEY", "")
+	cfg, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Gemini.ImageUpscale {
+		t.Fatal("GEMINI_IMAGE_UPSCALE must default to false")
+	}
+	if cfg.Server.APIKey != "" {
+		t.Fatal("API_KEY must default to unset")
+	}
+
+	t.Setenv("GEMINI_IMAGE_UPSCALE", "true")
+	t.Setenv("API_KEY", " local-key ")
+	cfg, err = New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Gemini.ImageUpscale || cfg.Server.APIKey != "local-key" {
+		t.Fatalf("upscale=%v apiKey=%q", cfg.Gemini.ImageUpscale, cfg.Server.APIKey)
+	}
+}
+
 func TestCookieValueExtractsAuthFromFullHeader(t *testing.T) {
 	header := "NID=rollout; __Secure-1PSID=account=value; __Secure-1PSIDTS=timestamp; SIDCC=flags"
 	if got := cookieValue(header, "__Secure-1PSID"); got != "account=value" {

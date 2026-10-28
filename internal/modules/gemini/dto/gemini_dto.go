@@ -311,12 +311,30 @@ type GenerationConfig struct {
 	TopK            int32           `json:"topK,omitempty"`
 	MaxOutputTokens int32           `json:"maxOutputTokens,omitempty"`
 	ThinkingConfig  *ThinkingConfig `json:"thinkingConfig,omitempty"`
+	// ResponseModalities containing "IMAGE" opts an image-model request into
+	// generated image bytes as InlineData. Other values leave the request unchanged.
+	ResponseModalities []string `json:"responseModalities,omitempty"`
+}
+
+// WantsImageOutput reports whether the request explicitly asks for image output.
+func (g *GenerationConfig) WantsImageOutput() bool {
+	if g == nil {
+		return false
+	}
+	for _, modality := range g.ResponseModalities {
+		if strings.EqualFold(strings.TrimSpace(modality), "IMAGE") {
+			return true
+		}
+	}
+	return false
 }
 
 // GeminiGenerateResponse represents a Gemini generate response
 type GeminiGenerateResponse struct {
 	Candidates    []Candidate    `json:"candidates"`
 	UsageMetadata *UsageMetadata `json:"usageMetadata,omitempty"`
+	// ModelVersion is the model Gemini actually served, copied from the provider response.
+	ModelVersion string `json:"modelVersion,omitempty"`
 }
 
 // Candidate represents a candidate response

@@ -36,13 +36,17 @@ type OpenAIService struct {
 	log    *zap.Logger
 	// generate sends a prompt to Gemini; tests replace it.
 	generate func(ctx context.Context, prompt string, options ...providers.GenerateOption) (*providers.Response, error)
+	// singleAttempt mirrors GEMINI_MAX_RETRIES<=1: one tool-bridge request and
+	// no JSON repair request.
+	singleAttempt bool
 }
 
 func NewOpenAIService(client *providers.Client, log *zap.Logger) *OpenAIService {
 	return &OpenAIService{
-		client:   client,
-		log:      log,
-		generate: client.GenerateContent,
+		client:        client,
+		log:           log,
+		generate:      client.GenerateContent,
+		singleAttempt: client.SingleAttempt(),
 	}
 }
 
@@ -612,8 +616,12 @@ func (c toolBridgeCall) rawArguments() json.RawMessage {
 func (s *OpenAIService) generateToolBridge(ctx context.Context, req dto.ChatCompletionRequest, prompt string, opts []providers.GenerateOption) (*providers.Response, []dto.ChatCompletionToolCall, string, error) {
 	mustCall := req.ToolChoiceMode() == "required" || req.ToolChoiceMode() == "function"
 	attemptPrompt := prompt
+	maxAttempts := maxToolBridgeAttempts
+	if s.singleAttempt {
+		maxAttempts = 1
+	}
 	var lastErr error
-	for attempt := 1; attempt <= maxToolBridgeAttempts; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		response, err := s.generate(ctx, attemptPrompt, opts...)
 		if err != nil {
 			return nil, nil, "", err
@@ -629,13 +637,13 @@ func (s *OpenAIService) generateToolBridge(ctx context.Context, req dto.ChatComp
 
 		lastErr = err
 		s.log.Warn("Gemini returned an unusable tool call",
-			zap.Int("attempt", attempt), zap.Int("max_attempts", maxToolBridgeAttempts),
+			zap.Int("attempt", attempt), zap.Int("max_attempts", maxAttempts),
 			zap.String("model", req.Model), zap.Error(err))
 		s.log.Debug("Unusable tool bridge reply", zap.String("text", response.Text))
 		attemptPrompt = prompt + "\n\nYour previous reply could not be used: " + err.Error() +
 			". Reply again with JSON only, exactly matching the output schema above, and set every required argument."
 	}
-	return nil, nil, "", fmt.Errorf("%w after %d attempts: %v", ErrInvalidToolCall, maxToolBridgeAttempts, lastErr)
+	return nil, nil, "", fmt.Errorf("%w after %d attempts: %v", ErrInvalidToolCall, maxAttempts, lastErr)
 }
 
 func (s *OpenAIService) buildToolBridgePrompt(req dto.ChatCompletionRequest, basePrompt string) string {

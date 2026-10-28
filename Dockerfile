@@ -23,6 +23,11 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /home/appuser
 
+# Pre-create the cookie cache as appuser. A named volume mounted here copies
+# this directory's ownership on first use; without it, Docker creates the
+# mount point as root and the non-root process cannot write the cache.
+RUN mkdir -p /home/appuser/.cookies && chown appuser:appgroup /home/appuser/.cookies
+
 # Copy file from builder and change ownership
 COPY --from=builder --chown=appuser:appgroup /app/main .
 

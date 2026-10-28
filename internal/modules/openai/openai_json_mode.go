@@ -217,6 +217,13 @@ func (s *OpenAIService) ensureJSONReply(req dto.ChatCompletionRequest, prompt, t
 	s.log.Debug("response_format reply was not valid JSON",
 		zap.String("model", req.Model), zap.Error(err))
 
+	// GEMINI_MAX_RETRIES<=1 forbids the extra generation a repair would send.
+	if s.singleAttempt {
+		s.log.Warn("response_format reply is invalid; repair skipped because GEMINI_MAX_RETRIES is 1",
+			zap.String("model", req.Model), zap.Error(err))
+		return text
+	}
+
 	repaired, regenErr := regenerate(repairJSONPrompt(prompt, schema, err))
 	if regenErr != nil {
 		s.log.Warn("response_format repair request failed; returning the raw reply",

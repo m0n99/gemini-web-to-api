@@ -33,6 +33,9 @@ type GeminiConfig struct {
 	MaxRetries          int
 	Cookies             string
 	Temporary           bool
+	// ImageUpscale requests Gemini's native upscaled image bytes for generated
+	// images, falling back to the standard download when that is unavailable.
+	ImageUpscale bool
 	// CookieAPIKey enables the authenticated POST /admin/cookies endpoint used
 	// by browser extensions to push a fresh session. When empty the route is
 	// not registered at all.
@@ -53,6 +56,9 @@ type OpenAIConfig struct {
 
 type ServerConfig struct {
 	Port string
+	// APIKey, when set, requires `Authorization: Bearer <APIKey>` on the
+	// OpenAI, Gemini and Claude inference routes. Health and docs stay open.
+	APIKey string
 }
 
 const (
@@ -77,6 +83,7 @@ func New() (*Config, error) {
 
 	// Server
 	cfg.Server.Port = getEnv("PORT", defaultServerPort)
+	cfg.Server.APIKey = strings.TrimSpace(os.Getenv("API_KEY"))
 
 	// General
 	cfg.LogLevel = getEnv("LOG_LEVEL", defaultLogLevel)
@@ -106,6 +113,7 @@ func New() (*Config, error) {
 	}
 	cfg.Gemini.MaxRetries = getEnvInt("GEMINI_MAX_RETRIES", defaultGeminiMaxRetries)
 	cfg.Gemini.Temporary = getEnvBool("GEMINI_TEMPORARY", false)
+	cfg.Gemini.ImageUpscale = getEnvBool("GEMINI_IMAGE_UPSCALE", false)
 	if cfg.Gemini.AuthUser != "" {
 		if n, err := strconv.Atoi(cfg.Gemini.AuthUser); err != nil || n < 0 {
 			return nil, fmt.Errorf("invalid GEMINI_AUTH_USER value: %q (must be a non-negative account slot)", cfg.Gemini.AuthUser)

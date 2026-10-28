@@ -46,12 +46,17 @@ type Client struct {
 	healthy                bool
 	log                    *zap.Logger
 
-	autoRefresh      bool
-	refreshInterval  time.Duration
-	stopRefresh      chan struct{}
-	maxRetries       int
+	autoRefresh     bool
+	refreshInterval time.Duration
+	stopRefresh     chan struct{}
+	maxRetries      int
+	// singleAttempt is set from GEMINI_MAX_RETRIES<=1. Callers that would
+	// otherwise send a second generation (tool-bridge and JSON repair) collapse
+	// to one request. Zero-value test clients keep the normal behavior.
+	singleAttempt    bool
 	cachedModels     []geminiModel
 	defaultTemporary bool
+	imageUpscale     bool
 
 	// refreshSessionTokenFn is a test seam for Init; nil uses the real
 	// refreshSessionToken implementation.
@@ -142,8 +147,10 @@ func newClient(cfg *configs.Config, log *zap.Logger, validate func(ctx context.C
 		refreshInterval:        time.Duration(refreshIntervalMinutes) * time.Minute,
 		stopRefresh:            make(chan struct{}),
 		maxRetries:             cfg.Gemini.MaxRetries,
+		singleAttempt:          cfg.Gemini.MaxRetries <= 1,
 		log:                    log,
 		defaultTemporary:       cfg.Gemini.Temporary,
+		imageUpscale:           cfg.Gemini.ImageUpscale,
 		sessionValidator:       validate,
 		envCookieHash:          cookieHeaderHash(cfg.Gemini.Cookies),
 	}
@@ -834,12 +841,32 @@ func (c *Client) generateContent(ctx context.Context, prompt string, metadata []
 				if !result.Images[i].Generated {
 					continue
 				}
+				result.Images[i].metaWidth = result.Images[i].Width
+				result.Images[i].metaHeight = result.Images[i].Height
+				// Native upscale is tried once per image. Any failure uses the
+				// standard download, and nothing here sends another generation.
+				if c.imageUpscale && result.Images[i].upscale.complete() {
+					upscaled, upscaleErr := c.fetchUpscaledImage(ctx, result.Images[i].upscale, prompt, cookieHdr)
+					if upscaleErr == nil {
+						result.Images[i].B64JSON = base64.StdEncoding.EncodeToString(upscaled.Bytes)
+						result.Images[i].MimeType = upscaled.MimeType
+						result.Images[i].Width = upscaled.Width
+						result.Images[i].Height = upscaled.Height
+						result.Images[i].upscaleApplied = true
+						continue
+					}
+					c.logUpscaleFallback(upscaleErr)
+				}
 				encoded, downloadErr := c.downloadGeneratedImage(ctx, result.Images[i].URL, cookieHdr)
 				if downloadErr != nil {
 					c.log.Warn("Failed to download generated image", zap.Error(downloadErr))
 					continue
 				}
 				result.Images[i].B64JSON = encoded
+				// The MIME must describe the bytes returned, not the URL metadata.
+				if mime := detectedImageMIME(encoded); mime != "" {
+					result.Images[i].MimeType = mime
+				}
 			}
 		}
 		return result, nil
@@ -1078,6 +1105,12 @@ func (c *Client) ListModels() []ModelInfo {
 	return models
 }
 
+// SingleAttempt reports whether GEMINI_MAX_RETRIES is one or less, meaning
+// callers must not send a second generation request.
+func (c *Client) SingleAttempt() bool {
+	return c.singleAttempt
+}
+
 func (c *Client) ListModelsIDs() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -1173,12 +1206,17 @@ func (c *Client) parseResponse(text string) (*Response, error) {
 				if len(payload) > 4 {
 					candidates, ok := payload[4].([]interface{})
 					if ok && candidates != nil && len(candidates) > 0 {
+						cid, rid := responsePairFromPayload(payload)
 						for _, rawCandidate := range candidates {
 							candidate, ok := rawCandidate.([]interface{})
 							if !ok {
 								continue
 							}
+							// Refs come from this candidate and payload only, so a
+							// generated image never borrows IDs from another turn.
+							refs := upscaleRefsByURL(candidate, cid, rid)
 							for _, image := range extractGeneratedImages(candidate) {
+								image.upscale = refs[image.URL]
 								imagesByURL[image.URL] = image
 							}
 							for _, audio := range extractGeneratedAudio(candidate) {

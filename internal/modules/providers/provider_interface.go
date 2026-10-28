@@ -85,6 +85,14 @@ type Image struct {
 	Width     int    `json:"width,omitempty"`
 	Height    int    `json:"height,omitempty"`
 	MimeType  string `json:"mime_type,omitempty"`
+	// upscale holds the response-local identifiers needed for the native
+	// upscale RPC. It is unexported so it never reaches JSON or logs.
+	upscale *upscaleRef
+	// metaWidth and metaHeight keep the dimensions Gemini reported before any
+	// native upscale replaces Width and Height. Diagnostics compare the two.
+	metaWidth, metaHeight int
+	// upscaleApplied is true only when native upscaled bytes replaced the image.
+	upscaleApplied bool
 }
 
 // Candidate represents an alternative response
