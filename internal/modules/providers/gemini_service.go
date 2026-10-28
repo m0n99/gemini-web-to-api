@@ -711,6 +711,10 @@ func (c *Client) generateContent(ctx context.Context, prompt string, metadata []
 	}
 	generateURL := geminiAccountURL(EndpointGenerate, c.authUser) + "?" + queryValues.Encode()
 
+	requestedModel := strings.TrimSpace(config.Model)
+	if requestedModel == "" {
+		requestedModel = selectedModel.ID
+	}
 	maxAttempts := c.maxRetries
 	// A retried video/music request could start (and bill) a second generation.
 	if maxAttempts <= 0 || config.Video != nil || config.Music != nil {
@@ -758,6 +762,18 @@ func (c *Client) generateContent(ctx context.Context, prompt string, metadata []
 			httpReq.Header.Set("Cookie", cookieHdr)
 		}
 
+		// Logged per send, so validation and upload failures never produce an attempt event.
+		c.log.Info("Gemini generation attempt",
+			zap.String("trace_id", requestID),
+			zap.Int("attempt", attempt),
+			zap.String("requested_model", requestedModel),
+			zap.String("selected_model", selectedModel.ID),
+			zap.String("selected_model_id", selectedModel.ModelID),
+			zap.Int("model_number", selectedModel.ModelNumber),
+			zap.Int("capacity", selectedModel.Capacity),
+			zap.Int("capacity_field", selectedModel.CapacityField),
+			zap.Bool("temporary", c.defaultTemporary),
+		)
 		httpResp, err := plainClient.Do(httpReq)
 		httpDuration := time.Since(httpStart)
 		if err != nil {
@@ -806,14 +822,12 @@ func (c *Client) generateContent(ctx context.Context, prompt string, metadata []
 		}
 		result.Model = selectedModel.ID
 		result.ModelID = selectedModel.ModelID
-		result.RequestedModel = strings.TrimSpace(config.Model)
-		if result.RequestedModel == "" {
-			result.RequestedModel = selectedModel.ID
-		}
+		result.RequestedModel = requestedModel
 		// Gemini may silently serve a lower-tier model when the selected model's
 		// web quota is exhausted. A single known model ID in the protocol body is
 		// routing evidence; never label that response as the requested model.
-		if actual, ok := c.responseModel(respBody); ok && actual.ModelID != selectedModel.ModelID {
+		actual, actualKnown := c.responseModel(respBody)
+		if actualKnown && actual.ModelID != selectedModel.ModelID {
 			result.Model = actual.ID
 			result.ModelID = actual.ModelID
 			c.log.Warn("Gemini served a different model",
@@ -821,6 +835,24 @@ func (c *Client) generateContent(ctx context.Context, prompt string, metadata []
 				zap.String("actual_model", actual.ID),
 			)
 		}
+		// Success-only. The body ID is labelled as heuristic evidence, and an
+		// unidentified body never reports the selected model as the served one.
+		cid, _ := result.Metadata["cid"].(string)
+		responseFields := []zap.Field{
+			zap.String("trace_id", requestID),
+			zap.Int("attempt", attempt),
+			zap.String("selected_model_id", selectedModel.ModelID),
+			zap.Bool("conversation_id_present", cid != ""),
+		}
+		if actualKnown {
+			responseFields = append(responseFields,
+				zap.String("response_model", actual.ID),
+				zap.String("response_model_id", actual.ModelID),
+				zap.String("response_model_evidence", "unique_known_id_in_body"))
+		} else {
+			responseFields = append(responseFields, zap.String("response_model_evidence", "not_identified"))
+		}
+		c.log.Info("Gemini generation response parsed", responseFields...)
 		if config.Canvas {
 			result.Model += CanvasModelSuffix
 			result.RequestedModel += CanvasModelSuffix
